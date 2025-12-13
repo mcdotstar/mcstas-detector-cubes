@@ -1,0 +1,263 @@
+/*******************************************************************************
+*
+* %I
+* Written by:  Gregory Tucker
+* Date: 2025-12-13
+* Version: $Revision$
+* Origin: ESS
+* Release: McStas 3.
+*
+* Contiguous array of detector volumes
+*
+* %D
+*
+* Example: Detector_cubes(Nx=5, Ny=10, Nz=100, filename="Output.x", height=0.3, depth=0.025, width=0.1)
+*
+* %P
+* INPUT PARAMETERS:
+* Nx:              The number of cubes along the x dimension, each with length `width/Nx`, default=1. [1]
+* Ny:              The number of cubes along the y dimension, each with length `height/Ny`, default=1. [1]
+* Nz:              The number of cubes along the z dimension, each with length `depth/Nz`, default=1. [1]
+* height:          Defines the dimension of the detector perpendicular to the beam. [m]
+* width:           Defines the dimension of the detector perpendicular to the beam. [m]
+* depth:           Defines the dimension of the detector along the beam direction. [m]
+* index_x:      The string name of the neutron property used to record the detecting cube index in x [str]
+* index_y:      The string name of the neutron property used to record the detecting cube index in y [str]
+* index_z:      The string name of the neutron property used to record the detecting cube index in z [str]
+* detection_time:  The string name of the neutron property used to record the simulated time of detection [str]
+* filename:        The name of the file to record the detector histogram, default=COMP_NAME [str]
+* restore_neutron: If set, the monitor does not influence the neutron state [1]
+*
+* 
+******************************************************************************/
+
+DEFINE COMPONENT Detector_cubes
+DEFINITION PARAMETERS ()
+SETTING PARAMETERS (
+    int Nx=1, int Ny=1, int Nz=1,
+    width=0, height=0, depth=0,
+    string index_x, string index_y, string index_z, string detection_time,
+    string filename=0,
+    string projection_xy_filename=0,
+    string projection_yz_filename=0,
+    string projection_zx_filename=0,
+    int restore_neutron=0)
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+SHARE %{
+%}
+
+DECLARE
+%{
+double Dx;
+double Dy;
+double Dz;
+DArray3d grid_N;
+DArray3d grid_p;
+DArray3d grid_2;
+int STORE_X;
+int STORE_Y;
+int STORE_Z;
+int STORE_TIME;
+%}
+
+INITIALIZE
+  %{
+  unsigned uNx = Nx < 0 ? 0u : (unsigned) Nx;
+  unsigned uNy = Ny < 0 ? 0u : (unsigned) Ny;
+  unsigned uNz = Nz < 0 ? 0u : (unsigned) Nz;
+  if (uNx * uNy * uNz == 0) printf("WARNING: Detector_cubes %s has no cubes (Nx=%d,Ny=%d,Nz=%d)!\n", NAME_CURRENT_COMP, Nx, Ny, Nz);
+  Nx = (int) uNx;
+  Ny = (int) uNy;
+  Nz = (int) uNz;
+
+  Dx = width / (double) uNx;
+  Dy = height / (double) uNy;
+  Dz = depth / (double) uNz;
+
+  grid_N = create_darr3d(uNx, uNy, uNz);
+  grid_p = create_darr3d(uNx, uNy, uNz);
+  grid_2 = create_darr3d(uNx, uNy, uNz);
+  
+  STORE_X = STORE_Y = STORE_Z = STORE_TIME = 0;
+  int zero_int = 0;
+  double zero_double = 0;
+  if (index_x != 0 && index_x[0] != '\0') {
+    if (particle_setvar_void(_particle, index_x, (void *)&zero_int)) {
+      printf("Detector_cubes: %s: Position x parameter %s does not exist!\nERROR. Exiting",
+             NAME_CURRENT_COMP, index_x);
+      exit(-1);
+    }
+    STORE_X = 1;
+  }
+  if (index_y != 0 && index_y[0] != '\0') {
+    if (particle_setvar_void(_particle, index_y, (void *)&zero_int)) {
+      printf("Detector_cubes: %s: Position y parameter %s does not exist!\nERROR. Exiting",
+             NAME_CURRENT_COMP, index_y);
+      exit(-1);
+    }
+    STORE_Y = 1;
+  }
+  if (index_z != 0 && index_z[0] != '\0') {
+    if (particle_setvar_void(_particle, index_z, (void *)&zero_int)) {
+      printf("Detector_cubes: %s: Position z parameter %s does not exist!\nERROR. Exiting",
+             NAME_CURRENT_COMP, index_z);
+      exit(-1);
+    }
+    STORE_Z = 1;
+  }
+  if (detection_time != 0 && detection_time[0] != '\0') {
+    if (particle_setvar_void(_particle, detection_time, (void *)&zero_double)) {
+      printf("Detector_cubes: %s: Detection time parameter %s does not exist!\nERROR. Exiting",
+             NAME_CURRENT_COMP, detection_time);
+      exit(-1);
+    }
+    STORE_TIME = 1;
+  }
+  %}
+
+TRACE
+  %{
+    int ix=1+Nx;
+    int iy=1+Ny;
+    int iz=1+Nz;
+    double t0, t1, ta;
+    // Check for an intersection with the box that contains all cubes:
+    if (box_intersect(&t0, &t1, x, y, z, vx, vy, vz, width, height, depth)){
+      // pick the absorption time at random. 
+      // TODO: replace this with user-selectable He absorption, or layered B absorption?
+      ta = t0 + rand01() * (t1 - t0);
+      // and calculate the position * inside of the box, which is centered at (0,0,0) *
+      // converted into cube indexes
+      ix = floor((x + vx * ta + 0.5 * width) / Dx);
+      iy = floor((y + vy * ta + 0.5 * height) / Dy);
+      iz = floor((z + vz * ta + 0.5 * depth) / Dz);
+    }
+    if (ix < 0 || ix > Nx || iy < 0 || iy > Ny || iz < 0 || iz > Nz){
+      ABSORB;
+    } else {
+      #pragma acc atomic
+      grid_N[ix][iy][iz] = grid_N[ix][iy][iz] + 1;
+      #pragma acc atomic
+      grid_p[ix][iy][iz] = grid_p[ix][iy][iz] + p;
+      #pragma acc atomic
+      grid_2[ix][iy][iz] = grid_2[ix][iy][iz] + p*p;
+    }
+    if (restore_neutron) {
+      RESTORE_NEUTRON(INDEX_CURRENT_COMP, x, y, z, vx, vy, vz, t, sx, sy, sz, p);
+    } else {
+      SCATTER;
+    }
+    if (STORE_X){
+      particle_setvar_void(_particle, index_x, (void *)&ix);
+    }
+    if (STORE_Y){
+      particle_setvar_void(_particle, index_y, (void *)&iy);
+    }
+    if (STORE_Z){
+      particle_setvar_void(_particle, index_z, (void *)&iz);
+    }
+    if (STORE_TIME){
+      particle_setvar_void(_particle, detection_time, (void *)&ta);
+    }
+  %}
+
+SAVE
+  %{
+    // We would like to output the 3D histogram, but DETECTOR_OUT_3D does not appear to exist.
+    if (filename && filename[0] != '\0'){
+      printf("WARNING: 3-D file output currently not supported! Detector_cubes:%s\n", NAME_CURRENT_COMP);
+    }
+    // So instead, we output projection(s).
+    if (projection_xy_filename && projection_xy_filename[0] != '\0'){
+      DArray2d xy_N = create_darr2d(Nx, Ny);
+      DArray2d xy_p = create_darr2d(Nx, Ny);
+      DArray2d xy_2 = create_darr2d(Nx, Ny);
+      for (int i=0; i<Nx; ++i) for (int j=0; j<Ny; ++j){
+        xy_N[i][j] = 0;
+        xy_p[i][j] = 0;
+        xy_2[i][j] = 0;
+        for (int k=0; k<Nz; ++k){
+          xy_N[i][j] += grid_N[i][j][k];
+          xy_p[i][j] += grid_p[i][j][k];
+          xy_2[i][j] += grid_2[i][j][k];
+        }
+      }
+      DETECTOR_OUT_2D(
+        "Volume PSD monitor xy projection", "X", "Y", -width/2, width/2, -height/2, height/2,
+        Nx, Ny, &xy_N[0][0], &xy_p[0][0], &xy_2[0][0], projection_xy_filename
+      );
+      destroy_darr2d(xy_N);
+      destroy_darr2d(xy_p);
+      destroy_darr2d(xy_2);
+    }
+    if (projection_yz_filename && projection_yz_filename[0] != '\0'){
+      DArray2d yz_N = create_darr2d(Ny, Nz);
+      DArray2d yz_p = create_darr2d(Ny, Nz);
+      DArray2d yz_2 = create_darr2d(Ny, Nz);
+      for (int j=0; j<Ny; ++j) for (int k=0; k<Nz; ++k){
+        yz_N[j][k] = 0;
+        yz_p[j][k] = 0;
+        yz_2[j][k] = 0;
+        for (int i=0; i<Nx; ++i) {
+          yz_N[j][k] += grid_N[i][j][k];
+          yz_p[j][k] += grid_p[i][j][k];
+          yz_2[j][k] += grid_2[i][j][k];
+        }
+      }
+      DETECTOR_OUT_2D(
+        "Volume PSD monitor yz projection", "Y", "Z", -height/2, height/2, -depth/2, depth/2,
+        Ny, Nz, &yz_N[0][0], &yz_p[0][0], &yz_2[0][0], projection_yz_filename
+      );
+      destroy_darr2d(yz_N);
+      destroy_darr2d(yz_p);
+      destroy_darr2d(yz_2);
+    }
+    if (projection_zx_filename && projection_zx_filename[0] != '\0'){
+      DArray2d zx_N = create_darr2d(Nz, Nx);
+      DArray2d zx_p = create_darr2d(Nz, Nx);
+      DArray2d zx_2 = create_darr2d(Nz, Nx);
+      for (int k=0; k<Nz; ++k) for (int i=0; i<Nx; ++i) {
+        zx_N[k][i] = 0;
+        zx_p[k][i] = 0;
+        zx_2[k][i] = 0;
+        for (int j=0; j<Ny; ++j){
+          zx_N[k][i] += grid_N[i][j][k];
+          zx_p[k][i] += grid_p[i][j][k];
+          zx_2[k][i] += grid_2[i][j][k];
+	    }
+      }
+      DETECTOR_OUT_2D(
+        "Volume PSD monitor zx projection", "Z", "X", -depth/2, depth/2, -width/2, width/2,
+        Nz, Nx, &zx_N[0][0], &zx_p[0][0], &zx_2[0][0], projection_zx_filename
+      );
+      destroy_darr2d(zx_N);
+      destroy_darr2d(zx_p);
+      destroy_darr2d(zx_2);
+    }
+  %}
+
+FINALLY
+%{
+  destroy_darr3d(grid_N);
+  destroy_darr3d(grid_p);
+  destroy_darr3d(grid_2);
+%}
+
+MCDISPLAY
+%{
+  // Box position ... in the local coordinate system, right?
+  double pos_x = 0;
+  double pos_y = 0;
+  double pos_z = 0;
+  // Wall thickness if non-zero, otherwise the box is drawn solid
+  double thickness=0;
+  // A vector is passed to provide the box orientation.
+  // ... should this be (0,0,1) since we don't want to change anything?
+  double nx = 0;
+  double ny = 1;
+  double nz = 0;
+  mcdis_box(pos_x, pos_y, pos_z, width, height, depth, thickness, nx, ny, nz);
+%}
+
+END
