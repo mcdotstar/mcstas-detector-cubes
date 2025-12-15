@@ -246,18 +246,10 @@ FINALLY
 
 MCDISPLAY
 %{
-  // Box position ... in the local coordinate system, right?
-  double pos_x = 0;
-  double pos_y = 0;
-  double pos_z = 0;
-  // Wall thickness if non-zero, otherwise the box is drawn solid
-  double thickness=0;
-  // A vector is passed to provide the box orientation.
-  // ... should this be (0,0,1) since we don't want to change anything?
-  double nx = 0;
-  double ny = 1;
-  double nz = 0;
-  mcdis_box(pos_x, pos_y, pos_z, width, height, depth, thickness, nx, ny, nz);
+  // position (x, y, z) size (width, height, depth), wall thickness, bore-normal (nx, ny, nz)
+  // thickness=0 -> solid 'box'
+  // thickness>0 -> walls parallel to (nx, ny, nz) only
+  mcdis_box(0, 0, 0, width, height, depth, 0, 0, 0, 0);
 %}
 
 END
