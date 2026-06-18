@@ -1,2 +1,2 @@
-mccode-antlr >= 0.16.0
+mccode-antlr >= 0.20.3
 pytest
