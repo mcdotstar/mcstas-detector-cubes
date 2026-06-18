@@ -16,7 +16,7 @@ def this_registry():
 
 
 def assemble_instr():
-    from math import atan, pi, sin, cos
+    from math import atan, pi, sin, cos, atan2
     from mccode_antlr import Flavor
     from mccode_antlr.assembler import Assembler
     from textwrap import dedent
@@ -51,14 +51,21 @@ def assemble_instr():
         'focus_yh': common_mg_pars['height'],
         'lambda0': 1.5, 'dlambda': 0.1
     }, at=[(0,0,0), origin], rotate=[(0,45,0), origin])
-    r = 3.5
-    delta = atan(3*common_mg_pars['width']/r)
+    r_inner = 3.
+    r = 3.25
+    delta = atan(3*common_mg_pars['width']/r_inner)
+    eta = atan(common_mg_pars['width']/r_inner)
+    delta = 3 * eta # contiguous in angle at inner radius
+
     # Or use `for box in range(4, 8):` to match initial scope
-    for box in range(10):
+    # range(10) for the full detector
+
+    # Day zero coverage goes from 1 degree to 72 degrees in four modules
+    for box in range(4, 8):
         theta = (1 + 2 * (7 - box)) * delta
         ref = ts.component(
             f'box{box}_ref', 'Arm',
-            at=[(r*sin(theta), 0, r*cos(theta)), origin],
+            at=[(r_inner*sin(theta), 0, r_inner*cos(theta)), origin],
             rotate=[(0, theta/pi*180, 0), origin]
         )
         for column in range(6):
@@ -67,9 +74,14 @@ def assemble_instr():
             pars.update(common_mg_pars)
             local_x = (column-2.5)*common_mg_pars['width']
             local_y = common_mg_pars['depth']/2
+            phi = atan2(local_x, r)
+            phi = (column - 2.5) * eta
+            local_x = (r_inner + common_mg_pars['depth']/2) * sin(phi)
+            local_y = (r_inner + common_mg_pars['depth']/2) * cos(phi)
             col = ts.component(
                 f'mg_box{box}_col{column}', 'Detector_cubes',
-                parameters=pars, at=([local_x, 0, local_y], ref)
+                parameters=pars, at=([local_x, 0, local_y - r_inner], ref),
+                rotate=[(0, phi/pi*180, 0), ref]
             )
             col.GROUP('MultiGrid')
             col.EXTEND(dedent(f"""
@@ -83,9 +95,17 @@ def assemble_instr():
         'translator', 'Arm', at=([0, 0, 0], 'ABSOLUTE')
     ).EXTEND(dedent("""
     printf("Particle detected at box=%d column=%d, row=%d grid=%d layer=%d\\n", BOX, COLUMN, ROW, GRID, LAYER);
+    // ICD v5 says origin per column is at front upper left corner:
+    //   wire number increases from 0 to 19 front to back, then in steps of 20 from left to right, ultimately in [0, 119]
+    //   grid number increases from top to bottom
+    WIRE = 20 * ROW + LAYER; // ICD v5
+    GRID = 88 - GRID;
+
     """))
 
-    ts.instrument.determine_groups()
+    # The Readout components have not been made available in this test, and ReadoutVMM3 is not in the repository
+    #ts.component('readout', 'ReadoutVMM3', at=([0, 0, 0], 'ABSOLUTE'))
+
     return ts.instrument
 
 def test_detector_cubes_instr_file():
@@ -99,27 +119,3 @@ def test_detector_cubes():
     tr = assemble_instr()
 
     compile_and_run(tr, '-n 1 dummy=1', run=True)
-
-    # assert 'wire' in files
-    # assert 'pack' in files
-    # assert 'division' in files
-    # # verify that the output files are as expected ...
-    #
-    # pack = files['pack'].structured['I']
-    # assert sum(pack[:]) == 1000, "Every produced ray should be detected"
-    # assert std(pack[:]) == 0, "All 2-D pixels should be hit the same number of times"
-    #
-    # wire = files['wire'].structured['I']
-    # assert sum(wire) == 1000, "The wire output indexes the same pixelated space"
-    # assert std(wire) == 0
-    #
-    # # Now the real test for charge division correctness. The ratios of (1m)*rho and R have been chosen as 2:1.
-    # # This means that each tube should be twice as long as a gap in charge-division; so the whole
-    # # space needs to be divisible by 14 = 2*5 + 4 to have an integer number of bins per section.
-    # division = files['division'].structured['I']
-    # gaps = division[[2, 5, 8, 11]]
-    # assert sum(gaps) < 5, "Raster/randomness might put one event per gap"
-    # assert abs(sum(division)-sum(wire)) < 10, "All events should show up in the division signal, but one might be missing"
-    #
-    #
-
